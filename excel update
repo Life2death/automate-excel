@@ -66,8 +66,10 @@ Sub UpdateReportsAutomation()
 
     ' Update each target sheet and log
     UpdateSheet wb.Sheets("CVMRaw"), wb.Sheets("cvm_camp_rpt"), logWs, logRow, "cvm_camp_rpt"
+    SyncOpenRows wb.Sheets("cvm_camp_rpt"), wb.Sheets("cvm_open_in_camp")
     logRow = logRow + 1
     UpdateSheet wb.Sheets("SBTRaw"), wb.Sheets("sbt_camp_rpt"), logWs, logRow, "sbt_camp_rpt"
+    SyncOpenRows wb.Sheets("sbt_camp_rpt"), wb.Sheets("sbt_open_in_camp")
     logRow = logRow + 1
     UpdateSheet wb.Sheets("ArcherRaw"), wb.Sheets("archer_status_rpt"), logWs, logRow, "archer_status_rpt"
 
