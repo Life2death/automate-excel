@@ -2,25 +2,25 @@ Sub UpdateReportsAutomation()
 
     Dim wb As Workbook
     Set wb = ThisWorkbook
-    
+
     Dim folderPath As String
     folderPath = "C:\CVM_UPDATE\" ' Fixed folder path as specified
-    
+
     Dim filePathCVM As String, filePathSBT As String, filePathArcher As String
     filePathCVM = folderPath & "CAMP_CVM.xlsx"
     filePathSBT = folderPath & "CAMP_SBT.xlsx"
     filePathArcher = folderPath & "Archer.xlsx"
-    
+
     Dim newFormula As String
     Dim logWs As Worksheet
     Dim logRow As Long
-    
+
     ' Check if files exist
     If Dir(filePathCVM) = "" Or Dir(filePathSBT) = "" Or Dir(filePathArcher) = "" Then
         MsgBox "One or more files not found in " & folderPath & ". Please download and save with exact names."
         Exit Sub
     End If
-    
+
     ' Update CVMQuery source
     newFormula = "let" & vbCrLf & _
                  "    Source = Excel.Workbook(File.Contents(""" & filePathCVM & """), null, true)," & vbCrLf & _
@@ -29,7 +29,7 @@ Sub UpdateReportsAutomation()
                  "in" & vbCrLf & _
                  "    #""Promoted Headers"""
     wb.Queries("CVMQuery").Formula = newFormula
-    
+
     ' Update SBTQuery source
     newFormula = "let" & vbCrLf & _
                  "    Source = Excel.Workbook(File.Contents(""" & filePathSBT & """), null, true)," & vbCrLf & _
@@ -38,7 +38,7 @@ Sub UpdateReportsAutomation()
                  "in" & vbCrLf & _
                  "    #""Promoted Headers"""
     wb.Queries("SBTQuery").Formula = newFormula
-    
+
     ' Update ArcherQuery source
     newFormula = "let" & vbCrLf & _
                  "    Source = Excel.Workbook(File.Contents(""" & filePathArcher & """), null, true)," & vbCrLf & _
@@ -47,12 +47,12 @@ Sub UpdateReportsAutomation()
                  "in" & vbCrLf & _
                  "    #""Promoted Headers"""
     wb.Queries("ArcherQuery").Formula = newFormula
-    
+
     ' Refresh all queries to load new data into raw sheets
     Application.ScreenUpdating = False
     wb.RefreshAll
     Application.ScreenUpdating = True
-    
+
     ' Prepare log sheet
     On Error Resume Next
     Set logWs = wb.Sheets("UpdateLog")
@@ -63,80 +63,62 @@ Sub UpdateReportsAutomation()
         logWs.Range("A1:E1").Value = Array("Date/Time", "Sheet Name", "Old Records", "New Records", "Status")
     End If
     logRow = logWs.Cells(logWs.Rows.Count, "A").End(xlUp).Row + 1
-    
+
     ' Update each target sheet and log
     UpdateSheet wb.Sheets("CVMRaw"), wb.Sheets("cvm_camp_rpt"), logWs, logRow, "cvm_camp_rpt"
     logRow = logRow + 1
     UpdateSheet wb.Sheets("SBTRaw"), wb.Sheets("sbt_camp_rpt"), logWs, logRow, "sbt_camp_rpt"
     logRow = logRow + 1
     UpdateSheet wb.Sheets("ArcherRaw"), wb.Sheets("archer_status_rpt"), logWs, logRow, "archer_status_rpt"
-    
+
     MsgBox "Reports updated successfully! Check UpdateLog sheet for details."
 
 End Sub
 
 Private Sub UpdateSheet(rawWs As Worksheet, tgtWs As Worksheet, logWs As Worksheet, logRow As Long, sheetName As String)
-    
+
     Dim lastRow As Long, lastCol As Long
     Dim rawLastRow As Long, rawLastCol As Long
     Dim oldRecords As Long, newRecords As Long
     Dim status As String
-    Dim i As Integer
-    Dim isDuplicateHeader As Boolean
-    
+
     On Error GoTo ErrorHandler
-    
-    ' Calculate old records (data rows from row 3 down)
+
+    ' Calculate old records (data rows from row 2 down)
     lastCol = tgtWs.Cells(2, tgtWs.Columns.Count).End(xlToLeft).Column
     If lastCol = 0 Then lastCol = 1
     lastRow = tgtWs.Cells(tgtWs.Rows.Count, "A").End(xlUp).Row
-    oldRecords = Application.Max(lastRow - 2, 0) ' Data rows only
-    
-    ' Clear contents from row 2 down (removes old headers in row 2 + data below)
+    oldRecords = Application.Max(lastRow - 1, 0)
+
+    ' Clear contents from row 2 down (preserves fixed title in row 1)
     If lastRow >= 2 Then
         tgtWs.Range(tgtWs.Cells(2, 1), tgtWs.Cells(lastRow, lastCol)).ClearContents
     End If
-    
+
     ' Get new data dimensions
     rawLastCol = rawWs.Cells(1, rawWs.Columns.Count).End(xlToLeft).Column
     rawLastRow = rawWs.Cells(rawWs.Rows.Count, "A").End(xlUp).Row
-    newRecords = Application.Max(rawLastRow - 1, 0) ' Data rows only
-    
-    If rawLastRow >= 1 Then ' At least headers
-        ' Copy entire imported data (headers to tgt row 2, data to row 3+)
-        rawWs.Range(rawWs.Cells(1, 1), rawWs.Cells(rawLastRow, rawLastCol)).Copy
+    newRecords = Application.Max(rawLastRow - 1, 0)
+
+    If rawLastRow > 1 Then ' Require at least one data row in addition to headers
+        ' Copy only data rows (skip header) so row 1 remains fixed title
+        rawWs.Range(rawWs.Cells(2, 1), rawWs.Cells(rawLastRow, rawLastCol)).Copy
         tgtWs.Cells(2, 1).PasteSpecial xlPasteAll
         Application.CutCopyMode = False
-        
-        ' Optional: If row 1 (title) and row 2 (new headers) are identical, delete row 2 to avoid duplicate
-        ' Uncomment if needed:
-        ' isDuplicateHeader = True
-        ' For i = 1 To Application.Min(5, lastCol)
-        '     If tgtWs.Cells(1, i).Value <> tgtWs.Cells(2, i).Value Then
-        '         isDuplicateHeader = False
-        '         Exit For
-        '     End If
-        ' Next i
-        ' If isDuplicateHeader Then
-        '     tgtWs.Rows(2).Delete Shift:=xlUp
-        '     status = "Success (removed duplicate header)"
-        ' Else
-        '     status = "Success"
-        ' End If
         status = "Success"
     Else
         status = "No new data"
     End If
-    
+
     ' Log (records = data rows only)
     logWs.Cells(logRow, "A").Value = Now()
     logWs.Cells(logRow, "B").Value = sheetName
     logWs.Cells(logRow, "C").Value = oldRecords
     logWs.Cells(logRow, "D").Value = newRecords
     logWs.Cells(logRow, "E").Value = status
-    
+
     Exit Sub
-    
+
 ErrorHandler:
     status = "Error: " & Err.Description
     logWs.Cells(logRow, "A").Value = Now()
