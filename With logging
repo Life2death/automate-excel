@@ -1,0 +1,226 @@
+```vba
+Sub UpdateReportsAutomation()
+
+    Dim wb As Workbook
+    Set wb = ThisWorkbook
+    
+    Dim folderPath As String
+    folderPath = "C:\CVM_UPDATE\" ' Fixed folder path as specified
+    
+    Dim filePathCVM As String, filePathSBT As String, filePathArcher As String
+    filePathCVM = folderPath & "CAMP_CVM.xlsx"
+    filePathSBT = folderPath & "CAMP_SBT.xlsx"
+    filePathArcher = folderPath & "Archer.xlsx"
+    
+    Dim newFormula As String
+    Dim logWs As Worksheet
+    Dim logRow As Long
+    
+    ' Check if files exist
+    If Dir(filePathCVM) = "" Or Dir(filePathSBT) = "" Or Dir(filePathArcher) = "" Then
+        MsgBox "One or more files not found in " & folderPath & ". Please download and save with exact names."
+        Exit Sub
+    End If
+    
+    ' Update CVMQuery source
+    newFormula = "let" & vbCrLf & _
+                 "    Source = Excel.Workbook(File.Contents(""" & filePathCVM & """), null, true)," & vbCrLf & _
+                 "    CAMP_Excel_Report_Sheet = Source{[Item=""CAMP Excel Report"",Kind=""Sheet""]}[Data]," & vbCrLf & _
+                 "    #""Promoted Headers"" = Table.PromoteHeaders(CAMP_Excel_Report_Sheet, [PromoteAllScalars=true])" & vbCrLf & _
+                 "in" & vbCrLf & _
+                 "    #""Promoted Headers"""
+    wb.Queries("CVMQuery").Formula = newFormula
+    
+    ' Update SBTQuery source
+    newFormula = "let" & vbCrLf & _
+                 "    Source = Excel.Workbook(File.Contents(""" & filePathSBT & """), null, true)," & vbCrLf & _
+                 "    CAMP_Excel_Report_Sheet = Source{[Item=""CAMP Excel Report"",Kind=""Sheet""]}[Data]," & vbCrLf & _
+                 "    #""Promoted Headers"" = Table.PromoteHeaders(CAMP_Excel_Report_Sheet, [PromoteAllScalars=true])" & vbCrLf & _
+                 "in" & vbCrLf & _
+                 "    #""Promoted Headers"""
+    wb.Queries("SBTQuery").Formula = newFormula
+    
+    ' Update ArcherQuery source
+    newFormula = "let" & vbCrLf & _
+                 "    Source = Excel.Workbook(File.Contents(""" & filePathArcher & """), null, true)," & vbCrLf & _
+                 "    Archer_Search_Report_Sheet = Source{[Item=""Archer Search Report"",Kind=""Sheet""]}[Data]," & vbCrLf & _
+                 "    #""Promoted Headers"" = Table.PromoteHeaders(Archer_Search_Report_Sheet, [PromoteAllScalars=true])" & vbCrLf & _
+                 "in" & vbCrLf & _
+                 "    #""Promoted Headers"""
+    wb.Queries("ArcherQuery").Formula = newFormula
+    
+    ' Refresh all queries to load new data into raw sheets
+    Application.ScreenUpdating = False
+    wb.RefreshAll
+    Application.ScreenUpdating = True
+    
+    ' Prepare log sheet
+    On Error Resume Next
+    Set logWs = wb.Sheets("UpdateLog")
+    On Error GoTo 0
+    If logWs Is Nothing Then
+        Set logWs = wb.Sheets.Add(After:=wb.Sheets(wb.Sheets.Count))
+        logWs.Name = "UpdateLog"
+        logWs.Range("A1:E1").Value = Array("Date/Time", "Sheet Name", "Old Records", "New Records", "Status")
+    End If
+    logRow = logWs.Cells(logWs.Rows.Count, "A").End(xlUp).Row + 1
+    
+    ' Update each target sheet and log
+    UpdateSheet wb.Sheets("CVMRaw"), wb.Sheets("cvm_camp_rpt"), logWs, logRow, "cvm_camp_rpt"
+    logRow = logRow + 1
+    UpdateSheet wb.Sheets("SBTRaw"), wb.Sheets("sbt_camp_rpt"), logWs, logRow, "sbt_camp_rpt"
+    logRow = logRow + 1
+    UpdateSheet wb.Sheets("ArcherRaw"), wb.Sheets("archer_status_rpt"), logWs, logRow, "archer_status_rpt"
+    logRow = logRow + 1
+    
+    ' Resize and log dependent sheets
+    ResizeDependentSheet wb.Sheets("cvm_camp_rpt"), wb.Sheets("cvm_open_in_camp"), logWs, logRow, "cvm_open_in_camp"
+    logRow = logRow + 1
+    ResizeDependentSheet wb.Sheets("sbt_camp_rpt"), wb.Sheets("sbt_open_in_camp"), logWs, logRow, "sbt_open_in_camp"
+    
+    MsgBox "Reports and dependent sheets updated successfully! Check UpdateLog sheet for details."
+
+End Sub
+
+Private Sub UpdateSheet(rawWs As Worksheet, tgtWs As Worksheet, logWs As Worksheet, logRow As Long, sheetName As String)
+    
+    Dim lastRow As Long, lastCol As Long
+    Dim rawLastRow As Long, rawLastCol As Long
+    Dim oldRecords As Long, newRecords As Long
+    Dim status As String
+    Dim clearRng As Range
+    
+    On Error GoTo ErrorHandler
+    
+    ' Calculate old dimensions (use row 1 for column detection)
+    lastCol = tgtWs.Cells(1, tgtWs.Columns.Count).End(xlToLeft).Column
+    If lastCol = 0 Then lastCol = 1
+    lastRow = tgtWs.Cells(tgtWs.Rows.Count, "A").End(xlUp).Row
+    oldRecords = Application.Max(lastRow - 1, 0) ' Data rows from row 2 down
+    
+    ' Set clear range from row 2 down and handle conflicts
+    If lastRow >= 2 Then
+        Set clearRng = tgtWs.Range(tgtWs.Cells(2, 1), tgtWs.Cells(lastRow, lastCol))
+        ' Unmerge any merged cells in range
+        clearRng.MergeCells = False
+        ' If range is part of a table, convert to normal range
+        If Not tgtWs.ListObjects.Count = 0 Then
+            Dim lo As ListObject
+            For Each lo In tgtWs.ListObjects
+                If Not Application.Intersect(clearRng, lo.Range) Is Nothing Then
+                    lo.Unlist ' Convert table to range
+                End If
+            Next lo
+        End If
+        ' Now clear contents
+        clearRng.ClearContents
+    End If
+    
+    ' Get new data dimensions
+    rawLastCol = rawWs.Cells(1, rawWs.Columns.Count).End(xlToLeft).Column
+    rawLastRow = rawWs.Cells(rawWs.Rows.Count, "A").End(xlUp).Row
+    newRecords = Application.Max(rawLastRow - 1, 0) ' Data rows only (exclude raw header)
+    
+    If newRecords > 0 Then
+        ' Copy only data rows (raw row 2+ to end) and paste to target row 2
+        rawWs.Range(rawWs.Cells(2, 1), rawWs.Cells(rawLastRow, rawLastCol)).Copy
+        tgtWs.Cells(2, 1).PasteSpecial xlPasteAll
+        Application.CutCopyMode = False
+        status = "Success (data replaced from row 2, fixed title preserved in row 1)"
+    Else
+        status = "No new data"
+    End If
+    
+    ' Log
+    logWs.Cells(logRow, "A").Value = Now()
+    logWs.Cells(logRow, "B").Value = sheetName
+    logWs.Cells(logRow, "C").Value = oldRecords
+    logWs.Cells(logRow, "D").Value = newRecords
+    logWs.Cells(logRow, "E").Value = status
+    
+    Exit Sub
+    
+ErrorHandler:
+    status = "Error: " & Err.Description
+    logWs.Cells(logRow, "A").Value = Now()
+    logWs.Cells(logRow, "B").Value = sheetName
+    logWs.Cells(logRow, "C").Value = oldRecords
+    logWs.Cells(logRow, "D").Value = 0
+    logWs.Cells(logRow, "E").Value = status
+
+End Sub
+
+Private Sub ResizeDependentSheet(srcWs As Worksheet, depWs As Worksheet, logWs As Worksheet, logRow As Long, sheetName As String)
+    
+    Dim srcLastRow As Long, srcLastCol As Long
+    Dim depLastRow As Long, depLastCol As Long
+    Dim rowsToAdd As Long, rowsToDelete As Long
+    Dim oldRecords As Long, newRecords As Long
+    Dim status As String
+    Dim formulaRow As Range
+    
+    On Error GoTo ErrorHandler
+    
+    ' Get source dimensions (data rows = srcLastRow - 1, since source data from row 2)
+    srcLastCol = srcWs.Cells(1, srcWs.Columns.Count).End(xlToLeft).Column
+    srcLastRow = srcWs.Cells(srcWs.Rows.Count, "A").End(xlUp).Row
+    newRecords = Application.Max(srcLastRow - 1, 0)
+    
+    ' Get dependent dimensions (data rows = depLastRow - 1, exclude row 1 headers)
+    depLastCol = depWs.Cells(1, depWs.Columns.Count).End(xlToLeft).Column ' Row 1 for headers
+    depLastRow = depWs.Cells(depWs.Rows.Count, "A").End(xlUp).Row
+    oldRecords = Application.Max(depLastRow - 1, 0)
+    
+    ' Clear data from row 2 down (preserve row 1 headers)
+    If depLastRow >= 2 Then
+        depWs.Range(depWs.Cells(2, 1), depWs.Cells(depLastRow, depLastCol)).ClearContents
+    End If
+    
+    ' Sync rows: Adjust to match source data rows (new total rows = 1 + newRecords)
+    rowsToAdd = newRecords - oldRecords
+    If rowsToAdd > 0 Then
+        ' Add rows at bottom
+        depWs.Rows(depLastRow + 1 & ":" & depLastRow + rowsToAdd).Insert Shift:=xlDown, CopyOrigin:=xlFormatFromLeftOrAbove
+        ' Copy formulas from the row above (assume row 2 has base formulas; copy to new rows)
+        Set formulaRow = depWs.Rows(2) ' Base formula row
+        formulaRow.Copy
+        depWs.Rows(depLastRow + 1 & ":" & depLastRow + rowsToAdd).PasteSpecial xlPasteFormulasAndNumberFormats
+        Application.CutCopyMode = False
+    ElseIf rowsToAdd < 0 Then
+        rowsToDelete = Abs(rowsToAdd)
+        ' Delete from bottom
+        depWs.Rows(depLastRow - rowsToDelete + 1 & ":" & depLastRow).Delete Shift:=xlUp
+    End If
+    
+    ' Update depLastRow after resize
+    depLastRow = 1 + newRecords
+    
+    ' Sync columns
+    If srcLastCol > depLastCol Then
+        depLastCol = srcLastCol ' Expand with blanks
+    ElseIf srcLastCol < depLastCol Then
+        depWs.Columns(srcLastCol + 1 & ":" & depLastCol).Clear ' Clear extras
+        depLastCol = srcLastCol
+    End If
+    
+    status = "Updated to " & depLastRow & " rows (" & newRecords & " data records), " & depLastCol & " columns"
+    
+    ' Log
+    logWs.Cells(logRow, "A").Value = Now()
+    logWs.Cells(logRow, "B").Value = sheetName
+    logWs.Cells(logRow, "C").Value = oldRecords
+    logWs.Cells(logRow, "D").Value = newRecords
+    logWs.Cells(logRow, "E").Value = status
+    
+    Exit Sub
+    
+ErrorHandler:
+    status = "Error: " & Err.Description
+    logWs.Cells(logRow, "A").Value = Now()
+    logWs.Cells(logRow, "B").Value = sheetName
+    logWs.Cells(logRow, "C").Value = oldRecords
+    logWs.Cells(logRow, "D").Value = 0
+    logWs.Cells(logRow, "E").Value = status
+
+End Sub
+```
